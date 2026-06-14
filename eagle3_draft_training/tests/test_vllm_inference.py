@@ -13,9 +13,9 @@ from eagle3_draft.vllm_inference import (
 
 
 class VllmInferenceTest(unittest.TestCase):
-    def test_builds_native_eagle3_config(self) -> None:
+    def test_builds_native_mtp_config(self) -> None:
         args = argparse.Namespace(
-            draft_model="org/eagle3-draft",
+            draft_model="org/gemma4-assistant",
             num_speculative_tokens=4,
             draft_tensor_parallel_size=2,
         )
@@ -23,19 +23,31 @@ class VllmInferenceTest(unittest.TestCase):
         self.assertEqual(
             build_speculative_config(args),
             {
-                "method": "eagle3",
-                "model": "org/eagle3-draft",
+                "method": "mtp",
+                "model": "org/gemma4-assistant",
                 "num_speculative_tokens": 4,
                 "draft_tensor_parallel_size": 2,
             },
         )
 
-    def test_rejects_custom_pt_checkpoint(self) -> None:
+    def test_rejects_non_assistant_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            Path(tmpdir, "draft_model.pt").touch()
+            Path(tmpdir, "config.json").write_text(
+                json.dumps({"model_type": "gemma4"}),
+                encoding="utf-8",
+            )
 
-            with self.assertRaisesRegex(ValueError, "not a vLLM-compatible"):
+            with self.assertRaisesRegex(ValueError, "Expected a Gemma 4 assistant"):
                 validate_draft_model(tmpdir)
+
+    def test_accepts_local_assistant_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "config.json").write_text(
+                json.dumps({"model_type": "gemma4_assistant"}),
+                encoding="utf-8",
+            )
+
+            validate_draft_model(tmpdir)
 
     def test_batch_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

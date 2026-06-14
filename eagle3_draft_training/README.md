@@ -1,261 +1,175 @@
-# EAGLE-3 draft model training
+# Gemma 4 assistant fine-tuning
 
-This folder contains a compact, Gemma-compatible training recipe for an EAGLE-3-style draft model.
+This project fine-tunes an existing Gemma 4 `*-assistant` checkpoint. It no
+longer creates a custom drafter architecture.
 
-## Naming convention
+This is intentionally not a reimplementation of SafeAILab EAGLE-3. The
+[official EAGLE repository](https://github.com/SafeAILab/EAGLE) trains a
+separate feature-fusion network and recommends
+[SpecForge](https://github.com/sgl-project/SpecForge) for production EAGLE-3
+training. Gemma 4 `*-assistant` checkpoints instead use the native
+Transformers/vLLM MTP interface with target hidden states and shared KV states.
 
-- `assistant_model_path`: path or Hugging Face ID of your existing assistant model. This is kept separate for clarity and future assisted-generation integration.
-- `target_model_path`: path or Hugging Face ID of the frozen target model used for tokenization, hidden states, embeddings, vocabulary size, and drafter supervision.
-- `target_model`: the in-memory frozen model object created from `target_model_path`.
-- `resume_draft_checkpoint_path`: path to an existing **drafter** checkpoint if you want to continue fine-tuning the draft model.
+The frozen target model supplies:
 
-Older configs using `model_name_or_path` still load as a fallback for `target_model_path`, but new configs should use `target_model_path` explicitly.
+- its final hidden state;
+- the token embeddings;
+- the shared full-attention and sliding-attention KV states.
 
-## Current local paths
+Those values are passed to `Gemma4AssistantForCausalLM` using the same interface
+as Transformers assisted generation. The trained output therefore remains a
+native Hugging Face Gemma 4 assistant checkpoint and can be used by Transformers
+or vLLM MTP speculative decoding.
 
-```yaml
-assistant_model_path: /home/c.kulkarni/hf_models/google/gemma-4-E2B-it-assistant
-target_model_path: /home/c.kulkarni/hf_models/google/gemma-4-E2B-it
+## Install
+
+```bash
+pip install -r requirements.txt
 ```
 
-## What is implemented
+Use a Transformers version that includes `gemma4_assistant`.
 
-This implementation:
-
-- freezes the target model;
-- reads hidden states from configurable target layers;
-- fuses selected layers through learned projections;
-- conditions on the previous token embedding;
-- trains a lightweight Transformer drafter to predict the target `genui_json` tokens;
-- supports supervised JSONL data with `response_text` as input and `genui_json` as output;
-- splits only the training JSONL into train/eval and supports a separate held-out test JSONL;
-- saves `best-checkpoint` using the lowest validation loss;
-- can save test predictions inside the best checkpoint folder;
-- supports TensorBoard logging, standalone evaluation, generation testing, target-model auto-configuration, and resuming/fine-tuning an existing drafter checkpoint.
-
-## Recommended one-file run
+## Configure and train
 
 Edit the variables at the top of:
 
+```text
+scripts/train_gemma4_assistant.sh
+```
+
+At minimum set:
+
 ```bash
-scripts/train_gemma4_eagle3.sh
+ASSISTANT_MODEL_PATH="/path/to/google/gemma-4-E2B-it-assistant"
+TARGET_MODEL_PATH="/path/to/google/gemma-4-E2B-it"
+TRAIN_JSONL="/path/to/train.jsonl"
+TEST_JSONL="/path/to/test.jsonl"  # optional
 ```
 
 Then run:
 
 ```bash
+CUDA_VISIBLE_DEVICES=0 bash scripts/train_gemma4_assistant.sh
+```
+
+The previous launcher name remains as a compatibility wrapper:
+
+```bash
 bash scripts/train_gemma4_eagle3.sh
 ```
 
-The script can run data preparation, training, evaluation, and prediction export from one place.
+## Data
 
-## Best checkpoint output
-
-During training, validation loss is monitored. Whenever `eval_loss` improves, the drafter is saved to:
-
-```text
-outputs/gemma4_eagle3_draft/best-checkpoint/
-```
-
-This folder contains:
-
-```text
-draft_model.pt
-draft_config.json
-training_config.json
-best_metrics.json
-```
-
-If `TEST_JSONL` is set and `SAVE_TEST_PREDICTIONS="true"` in the bash file, test predictions are saved into the same folder:
-
-```text
-outputs/gemma4_eagle3_draft/best-checkpoint/test_predictions.jsonl
-```
-
-## Auto-configure from your target model
-
-```bash
-python scripts/configure_from_assistant.py \
-  --assistant_model_path /home/c.kulkarni/hf_models/google/gemma-4-E2B-it-assistant \
-  --target_model_path /home/c.kulkarni/hf_models/google/gemma-4-E2B-it \
-  --config configs/gemma4_example.yaml \
-  --trust_remote_code \
-  --overwrite
-```
-
-This inspects the target model config and overwrites the YAML values for:
-
-```yaml
-assistant_model_path
-target_model_path
-target_hidden_layer_indices
-draft_hidden_size
-draft_num_heads
-draft_num_layers
-draft_intermediate_size
-```
-
-The utility chooses low/mid/high hidden-state indices based on the target model `num_hidden_layers`, including nested Gemma-style config fields.
-
-## Expected JSONL format
-
-Each JSONL line must be one JSON object with these keys:
+JSONL rows use:
 
 ```json
-{"response_text": "assistant natural language response here", "genui_json": {"type": "..."}}
+{"response_text": "Create a chart", "genui_json": {"type": "chart"}}
 ```
 
-`response_text` is used as the input/prompt. `genui_json` is used as the supervised output. During training, prompt tokens are masked with `-100`, so loss is computed only on output JSON tokens.
+Prompt tokens are masked, so cross-entropy is computed only for
+`genui_json` tokens.
 
-## Prepare data manually
+## Training objective
 
-The bash file can do this automatically. Manual command:
+The default is target-only supervised cross-entropy:
 
-```bash
-python scripts/prepare_jsonl.py \
-  --target_model_path /home/c.kulkarni/hf_models/google/gemma-4-E2B-it \
-  --train_jsonl data/raw/train.jsonl \
-  --test_jsonl data/raw/test.jsonl \
-  --output_dir data/tokenized/gemma4 \
-  --max_length 2048 \
-  --eval_ratio 0.05 \
-  --trust_remote_code
+```yaml
+kl_weight: 0.0
+ce_weight: 1.0
 ```
 
-This creates:
+Set `kl_weight` above zero to add target-logit distillation. This materializes
+full target-vocabulary logits and uses substantially more VRAM.
+
+The official EAGLE-3 trainer performs seven recurrent training-time-test steps
+and weights them by `0.8**step`. Gemma's native assistant is a different MTP
+architecture, but this repository supports the analogous rollout:
+
+```yaml
+rollout_steps: 1
+rollout_decay: 0.8
+```
+
+Start with one step. After confirming memory use and acceptance quality, try
+`rollout_steps: 3`, then up to `7`. Each extra step adds another assistant
+forward pass.
+
+LoRA is enabled by default. Training outputs include:
 
 ```text
-data/tokenized/gemma4/train/data.pt   # from train_jsonl
-data/tokenized/gemma4/eval/data.pt    # split from train_jsonl
-data/tokenized/gemma4/test/data.pt    # from test_jsonl, if provided
+outputs/gemma4_assistant_finetuned/
+  best-checkpoint/          # best full model or LoRA adapter
+  final-assistant/          # final full model or LoRA adapter
+  final-assistant-merged/   # merged model for vLLM when LoRA is enabled
 ```
 
-If `--test_jsonl` is omitted, only train/eval are created.
-
-## Train manually
+To continue an existing LoRA adapter, set:
 
 ```bash
-accelerate launch -m eagle3_draft.train --config configs/gemma4_runtime.yaml
+ASSISTANT_ADAPTER_PATH="/path/to/assistant-adapter"
 ```
 
-TensorBoard logs are written to:
-
-```text
-outputs/gemma4_eagle3_draft/tensorboard
-```
-
-Open them with:
+## Evaluate
 
 ```bash
-tensorboard --logdir outputs/gemma4_eagle3_draft/tensorboard
-```
+export PYTHONPATH="$PWD/src:${PYTHONPATH:-}"
 
-Logged metrics include:
-
-- `train/loss`
-- `train/accuracy`
-- `train/perplexity`
-- `train/lr`
-- `eval/loss`
-- `eval/accuracy`
-- `eval/perplexity`
-
-## Standalone evaluation
-
-```bash
 python -m eagle3_draft.eval \
   --config configs/gemma4_runtime.yaml \
-  --checkpoint_path outputs/gemma4_eagle3_draft/best-checkpoint \
+  --checkpoint_path outputs/gemma4_assistant_finetuned/best-checkpoint \
   --data_dir data/tokenized/gemma4/test
 ```
 
-## Test generation
-
-Batch JSONL:
+## Transformers speculative generation
 
 ```bash
 python -m eagle3_draft.test_generation \
   --config configs/gemma4_runtime.yaml \
-  --checkpoint_path outputs/gemma4_eagle3_draft/best-checkpoint \
-  --input_jsonl data/raw/test.jsonl \
-  --output_jsonl outputs/gemma4_eagle3_draft/best-checkpoint/test_predictions.jsonl
-```
-
-Single input:
-
-```bash
-python -m eagle3_draft.test_generation \
-  --config configs/gemma4_runtime.yaml \
-  --checkpoint_path outputs/gemma4_eagle3_draft/best-checkpoint \
+  --checkpoint_path outputs/gemma4_assistant_finetuned/best-checkpoint \
   --response_text "Create a chart showing monthly revenue"
 ```
 
-## Native vLLM speculative decoding
+Batch prediction:
 
-Install the vLLM dependencies:
+```bash
+python -m eagle3_draft.test_generation \
+  --config configs/gemma4_runtime.yaml \
+  --checkpoint_path outputs/gemma4_assistant_finetuned/best-checkpoint \
+  --input_jsonl /path/to/test.jsonl \
+  --output_jsonl outputs/test_predictions.jsonl
+```
+
+## vLLM MTP speculative decoding
+
+Install vLLM:
 
 ```bash
 pip install -r requirements-vllm.txt
 ```
 
-For a vLLM-compatible EAGLE-3 drafter, edit and run:
+Edit and run:
 
 ```bash
-bash scripts/run_vllm_eagle3.sh
+bash scripts/run_vllm_assistant.sh
 ```
 
-Or invoke it directly:
+Direct invocation:
 
 ```bash
-python scripts/vllm_eagle3_infer.py \
-  --target-model /path/to/target-model \
-  --draft-model /path/to/vllm-compatible-eagle3-draft \
+python scripts/vllm_assistant_infer.py \
+  --target-model /path/to/gemma-4-E2B-it \
+  --draft-model outputs/gemma4_assistant_finetuned/final-assistant-merged \
   --input-jsonl /path/to/test.jsonl \
-  --output-jsonl outputs/vllm_eagle3_predictions.jsonl \
+  --output-jsonl outputs/vllm_predictions.jsonl \
   --num-speculative-tokens 3 \
-  --max-new-tokens 256 \
   --dtype bfloat16 \
   --trust-remote-code
 ```
 
-Single input:
+The vLLM configuration uses:
 
-```bash
-python scripts/vllm_eagle3_infer.py \
-  --target-model /path/to/target-model \
-  --draft-model /path/to/vllm-compatible-eagle3-draft \
-  --response-text "Create a chart showing monthly revenue" \
-  --num-speculative-tokens 3 \
-  --max-new-tokens 256 \
-  --dtype bfloat16 \
-  --trust-remote-code
+```python
+{"method": "mtp", "model": "/path/to/fine-tuned-assistant"}
 ```
 
-vLLM loads EAGLE-3 drafters as Hugging Face model directories through
-`speculative_config={"method": "eagle3", ...}`. Such a directory must contain
-the architecture metadata and model weights expected by vLLM.
-
-The `draft_model.pt` produced by this repository is a custom
-`Eagle3DraftModel`, not a native vLLM EAGLE-3 checkpoint. It also consumes
-fresh target hidden states for each next-token prediction, so it cannot
-independently propose several future tokens. Passing `best-checkpoint` to the
-vLLM script is therefore rejected with a clear compatibility error rather than
-running an incorrect or non-accelerating loop. Use `test_generation` for that
-checkpoint, or train/export a native EAGLE-3 speculator before using vLLM.
-
-## Fine-tuning from an existing drafter checkpoint
-
-If you already have a trained drafter checkpoint and want to continue fine-tuning it, set this in the bash file:
-
-```bash
-RESUME_DRAFT_CHECKPOINT_PATH="outputs/gemma4_eagle3_draft/checkpoint-500"
-```
-
-That path can be either a checkpoint folder or the direct file path to `draft_model.pt`.
-
-## Important notes
-
-- This trains the **draft / drafter model**, not the full assistant or target model.
-- The target model is frozen and is only used to produce hidden states and embeddings.
-- For production-grade serving, you still need integration with a verification engine such as SGLang, vLLM, or a custom speculative decoding loop.
-- Official EAGLE-3 serving frameworks may expect checkpoint metadata/tree configs that are different from this lightweight trainer. Treat this folder as a training starting point.
+Do not pass an unmerged LoRA adapter to vLLM. Use `final-assistant-merged`.

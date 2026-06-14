@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Prepare JSONL records for EAGLE-3 drafter training.
+"""Prepare JSONL records for Gemma 4 assistant fine-tuning.
 
 Expected input format, one JSON object per line:
   {"response_text": "...", "genui_json": {...}}

@@ -11,33 +11,17 @@ import yaml
 class Eagle3TrainingConfig:
     train_data_dir: str
     output_dir: str
-    target_hidden_layer_indices: list[int]
-
-    # The existing assistant model path. Kept separate for clarity and future
-    # assisted-generation integration.
-    assistant_model_path: str | None = None
-
-    # The frozen target model used for tokenization, hidden states, embeddings,
-    # vocabulary size, and drafter supervision.
-    target_model_path: str | None = None
-
-    # Deprecated fallback kept only for older config files.
-    model_name_or_path: str | None = None
+    assistant_model_path: str
+    target_model_path: str
 
     eval_data_dir: str | None = None
     test_data_dir: str | None = None
-    resume_draft_checkpoint_path: str | None = None
+    assistant_adapter_path: str | None = None
     tensorboard_log_dir: str | None = None
 
     max_length: int = 2048
-    draft_hidden_size: int = 1024
-    draft_num_layers: int = 4
-    draft_num_heads: int = 8
-    draft_intermediate_size: int = 4096
-    dropout: float = 0.0
-
-    learning_rate: float = 2e-4
-    weight_decay: float = 0.01
+    learning_rate: float = 2e-5
+    weight_decay: float = 0.0
     warmup_steps: int = 100
     gradient_accumulation_steps: int = 4
     per_device_train_batch_size: int = 1
@@ -49,46 +33,48 @@ class Eagle3TrainingConfig:
     save_steps: int = 500
     seed: int = 42
 
+    temperature: float = 1.0
+    kl_weight: float = 0.0
+    ce_weight: float = 1.0
+    rollout_steps: int = 1
+    rollout_decay: float = 0.8
     bf16: bool = True
     fp16: bool = False
-    scheduled_sampling_prob: float = 0.0
     gradient_checkpointing: bool = True
     trust_remote_code: bool = True
 
+    use_lora: bool = False
+    merge_lora_on_save: bool = True
+    lora_rank: int = 16
+    lora_alpha: int = 32
+    lora_dropout: float = 0.05
+
     @classmethod
     def from_yaml(cls, path: str | Path) -> "Eagle3TrainingConfig":
-        with open(path, "r", encoding="utf-8") as f:
-            raw = yaml.safe_load(f)
-        if raw is None:
-            raw = {}
+        with open(path, "r", encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle) or {}
         allowed = {field.name for field in fields(cls)}
         unknown = set(raw) - allowed
         if unknown:
             raise ValueError(f"Unknown config keys: {sorted(unknown)}")
         cfg = cls(**raw)
-
-        # Backward compatibility: older configs used model_name_or_path for the
-        # model that produced hidden states. That is now target_model_path.
-        if cfg.target_model_path is None and cfg.model_name_or_path is not None:
-            cfg.target_model_path = cfg.model_name_or_path
-        if cfg.target_model_path is None and cfg.assistant_model_path is not None:
-            cfg.target_model_path = cfg.assistant_model_path
-        if cfg.target_model_path is None:
-            raise ValueError("Set 'target_model_path' in the YAML config.")
+        if cfg.bf16 and cfg.fp16:
+            raise ValueError("Only one of bf16 or fp16 may be enabled.")
+        if cfg.kl_weight < 0 or cfg.ce_weight < 0 or cfg.kl_weight + cfg.ce_weight <= 0:
+            raise ValueError("kl_weight and ce_weight must be non-negative with a positive sum.")
+        if cfg.rollout_steps < 1:
+            raise ValueError("rollout_steps must be at least 1.")
+        if not 0 < cfg.rollout_decay <= 1:
+            raise ValueError("rollout_decay must be in (0, 1].")
         return cfg
 
     @property
     def resolved_target_model_path(self) -> str:
-        if self.target_model_path is None:
-            raise ValueError("target_model_path is not configured.")
         return self.target_model_path
 
     @property
-    def resolved_assistant_model_path(self) -> str | None:
+    def resolved_assistant_model_path(self) -> str:
         return self.assistant_model_path
 
     def to_dict(self) -> dict[str, Any]:
-        data = {field.name: getattr(self, field.name) for field in fields(self)}
-        data["resolved_target_model_path"] = self.resolved_target_model_path
-        data["resolved_assistant_model_path"] = self.resolved_assistant_model_path
-        return data
+        return {field.name: getattr(self, field.name) for field in fields(self)}

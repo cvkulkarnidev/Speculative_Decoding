@@ -10,13 +10,13 @@ from .prompting import DEFAULT_SYSTEM_PROMPT, build_prompt
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run native vLLM EAGLE-3 speculative decoding."
+        description="Run vLLM speculative decoding with a Gemma 4 assistant checkpoint."
     )
     parser.add_argument("--target-model", required=True, help="Target model path or Hugging Face ID.")
     parser.add_argument(
         "--draft-model",
         required=True,
-        help="vLLM-compatible EAGLE-3 model path or Hugging Face ID.",
+        help="Fine-tuned Gemma 4 *-assistant model path or Hugging Face ID.",
     )
     input_group = parser.add_mutually_exclusive_group(required=True)
     input_group.add_argument("--response-text", help="Generate one GenUI JSON response.")
@@ -62,20 +62,19 @@ def validate_draft_model(draft_model: str) -> None:
         raise ValueError("--draft-model must be a Hugging Face model directory or model ID.")
 
     config_path = path / "config.json"
-    custom_checkpoint = path / "draft_model.pt"
-    if custom_checkpoint.exists() and not config_path.exists():
-        raise ValueError(
-            f"{path} is this repository's custom draft_model.pt checkpoint, not a "
-            "vLLM-compatible EAGLE-3 model directory. Native vLLM requires an "
-            "EAGLE-3 Hugging Face checkpoint containing config.json and model weights."
-        )
     if not config_path.exists():
         raise ValueError(f"No config.json found in local draft model directory: {path}")
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    if config.get("model_type") not in {"gemma4_assistant", "gemma4_unified_assistant"}:
+        raise ValueError(
+            "Expected a Gemma 4 assistant checkpoint; config.json model_type is "
+            f"{config.get('model_type')!r}."
+        )
 
 
 def build_speculative_config(args: argparse.Namespace) -> dict[str, Any]:
     config: dict[str, Any] = {
-        "method": "eagle3",
+        "method": "mtp",
         "model": args.draft_model,
         "num_speculative_tokens": args.num_speculative_tokens,
     }

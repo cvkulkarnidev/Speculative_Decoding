@@ -1,8 +1,8 @@
-"""Lightweight EAGLE-3-style drafter training package."""
+"""Gemma 4 assistant checkpoint fine-tuning package."""
 
 from typing import Any
 
-__all__ = ["Eagle3TrainingConfig", "Eagle3DraftModel"]
+__all__ = ["Eagle3TrainingConfig"]
 
 
 def __getattr__(name: str) -> Any:
@@ -10,8 +10,4 @@ def __getattr__(name: str) -> Any:
         from .config import Eagle3TrainingConfig
 
         return Eagle3TrainingConfig
-    if name == "Eagle3DraftModel":
-        from .model import Eagle3DraftModel
-
-        return Eagle3DraftModel
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
