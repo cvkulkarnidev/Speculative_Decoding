@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from .assistant import assistant_rollout, compute_rollout_loss_and_metrics, load_assistant_model
+from .assistant import assistant_rollout, compute_rollout_loss_and_metrics, load_assistant_model, shift_left
 from .config import Eagle3TrainingConfig
 from .data import SupervisedDataCollator, SupervisedJsonlDataset
 
@@ -80,7 +80,7 @@ def run_eval(cfg: Eagle3TrainingConfig, checkpoint_path: str, data_dir: str) -> 
             ce_weight=cfg.ce_weight,
             decay=cfg.rollout_decay,
         )
-        labels = batch["labels"][:, 1:]
+        labels = shift_left(batch["labels"], -100)[:, 1:]
         valid = labels != -100
         predictions = assistant_logits[0][:, :-1].argmax(dim=-1)
         losses.append(accelerator.gather_for_metrics(loss.detach()).mean())

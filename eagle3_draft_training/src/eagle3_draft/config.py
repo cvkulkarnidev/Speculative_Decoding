@@ -22,6 +22,7 @@ class Eagle3TrainingConfig:
     max_length: int = 2048
     learning_rate: float = 2e-5
     weight_decay: float = 0.0
+    max_grad_norm: float = 1.0
     warmup_steps: int = 100
     gradient_accumulation_steps: int = 4
     per_device_train_batch_size: int = 1
@@ -34,8 +35,8 @@ class Eagle3TrainingConfig:
     seed: int = 42
 
     temperature: float = 1.0
-    kl_weight: float = 0.0
-    ce_weight: float = 1.0
+    kl_weight: float = 1.0
+    ce_weight: float = 0.0
     rollout_steps: int = 1
     rollout_decay: float = 0.8
     bf16: bool = True
@@ -62,6 +63,8 @@ class Eagle3TrainingConfig:
             raise ValueError("Only one of bf16 or fp16 may be enabled.")
         if cfg.kl_weight < 0 or cfg.ce_weight < 0 or cfg.kl_weight + cfg.ce_weight <= 0:
             raise ValueError("kl_weight and ce_weight must be non-negative with a positive sum.")
+        if cfg.max_grad_norm < 0:
+            raise ValueError("max_grad_norm must be non-negative.")
         if cfg.rollout_steps < 1:
             raise ValueError("rollout_steps must be at least 1.")
         if not 0 < cfg.rollout_decay <= 1:

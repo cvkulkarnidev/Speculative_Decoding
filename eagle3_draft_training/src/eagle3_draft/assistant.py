@@ -98,7 +98,8 @@ def assistant_rollout(
 
     position_ids = torch.arange(input_ids.shape[1], device=input_ids.device).unsqueeze(0)
     position_ids = position_ids.expand(input_ids.shape[0], -1)
-    current_ids = input_ids
+    # The assistant pairs target state h_t with token x_(t+1) to predict x_(t+2).
+    current_ids = shift_left(input_ids, pad_token_id)
     current_hidden = target_outputs.hidden_states[-1]
     logits_per_step: list[torch.Tensor] = []
     for _ in range(steps):
@@ -172,8 +173,10 @@ def compute_rollout_loss_and_metrics(
         raise ValueError("assistant_logits must contain at least one rollout step.")
     weighted_losses: list[torch.Tensor] = []
     metrics: dict[str, float] = {}
-    current_labels = labels
-    current_target_logits = target_logits
+    # Step one predicts one token beyond the target model's ordinary next-token
+    # prediction. Advance supervision once before compute_loss shifts it again.
+    current_labels = shift_left(labels, -100)
+    current_target_logits = shift_left(target_logits, 0.0) if target_logits is not None else None
     total_weight = 0.0
     for step, logits in enumerate(assistant_logits):
         weight = decay**step

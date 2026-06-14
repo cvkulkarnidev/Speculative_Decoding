@@ -21,6 +21,7 @@ from .assistant import (
     compute_rollout_loss_and_metrics,
     load_assistant_model,
     save_assistant_checkpoint,
+    shift_left,
 )
 from .config import Eagle3TrainingConfig
 from .data import SupervisedDataCollator, SupervisedJsonlDataset
@@ -77,7 +78,7 @@ def evaluate(
             ce_weight=cfg.ce_weight,
             decay=cfg.rollout_decay,
         )
-        labels = batch["labels"][:, 1:]
+        labels = shift_left(batch["labels"], -100)[:, 1:]
         valid = labels != -100
         predictions = assistant_logits[0][:, :-1].argmax(dim=-1)
         losses.append(accelerator.gather_for_metrics(loss.detach()).mean())
@@ -205,6 +206,8 @@ def train(cfg: Eagle3TrainingConfig) -> None:
                     decay=cfg.rollout_decay,
                 )
                 accelerator.backward(loss)
+                if accelerator.sync_gradients and cfg.max_grad_norm > 0:
+                    accelerator.clip_grad_norm_(assistant_model.parameters(), cfg.max_grad_norm)
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
@@ -217,6 +220,7 @@ def train(cfg: Eagle3TrainingConfig) -> None:
                     if writer:
                         for key, value in metrics.items():
                             writer.add_scalar(f"train/{key}", value, global_step)
+                        writer.add_scalar("train/learning_rate", scheduler.get_last_lr()[0], global_step)
                 if eval_loader is not None and cfg.eval_steps > 0 and global_step % cfg.eval_steps == 0:
                     eval_metrics = evaluate(
                         accelerator,

@@ -11,6 +11,7 @@ tensorboard_log_dir: outputs/gemma4_assistant_finetuned/tensorboard
 max_length: 2048
 learning_rate: 0.00002
 weight_decay: 0.0
+max_grad_norm: 1.0
 warmup_steps: 100
 gradient_accumulation_steps: 4
 per_device_train_batch_size: 1
@@ -22,10 +23,11 @@ eval_steps: 200
 save_steps: 500
 seed: 42
 
-# KL distillation requires full target-vocabulary logits and substantially more VRAM.
+# Distillation makes the assistant match the frozen target model, which is the
+# objective needed for speculative decoding. It requires full target logits.
 temperature: 1.0
-kl_weight: 0.0
-ce_weight: 1.0
+kl_weight: 1.0
+ce_weight: 0.0
 
 # Official EAGLE-3 uses seven recurrent positions weighted by 0.8**step.
 # Start with 1 for Gemma assistants, then increase after validating VRAM/runtime.

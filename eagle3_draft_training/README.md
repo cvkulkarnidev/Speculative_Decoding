@@ -71,20 +71,25 @@ JSONL rows use:
 {"response_text": "Create a chart", "genui_json": {"type": "chart"}}
 ```
 
-Prompt tokens are masked, so cross-entropy is computed only for
+Prompt tokens are masked, so the objective is computed only for
 `genui_json` tokens.
 
 ## Training objective
 
-The default is target-only supervised cross-entropy:
+The default distills the frozen target model into the assistant:
 
 ```yaml
-kl_weight: 0.0
-ce_weight: 1.0
+kl_weight: 1.0
+ce_weight: 0.0
 ```
 
-Set `kl_weight` above zero to add target-logit distillation. This materializes
-full target-vocabulary logits and uses substantially more VRAM.
+This materializes full target-vocabulary logits and uses substantially more
+VRAM. The assistant input is aligned with the native MTP contract: target
+hidden state `h_t` is paired with token `x_(t+1)` to predict `x_(t+2)`.
+
+Supervised cross-entropy can be mixed in by setting `ce_weight` above zero, but
+the target model should already perform the task being accelerated. A draft
+model trained away from the target distribution will have poor acceptance.
 
 The official EAGLE-3 trainer performs seven recurrent training-time-test steps
 and weights them by `0.8**step`. Gemma's native assistant is a different MTP
