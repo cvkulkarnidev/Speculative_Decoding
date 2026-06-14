@@ -190,6 +190,59 @@ python -m eagle3_draft.test_generation \
   --response_text "Create a chart showing monthly revenue"
 ```
 
+## Native vLLM speculative decoding
+
+Install the vLLM dependencies:
+
+```bash
+pip install -r requirements-vllm.txt
+```
+
+For a vLLM-compatible EAGLE-3 drafter, edit and run:
+
+```bash
+bash scripts/run_vllm_eagle3.sh
+```
+
+Or invoke it directly:
+
+```bash
+python scripts/vllm_eagle3_infer.py \
+  --target-model /path/to/target-model \
+  --draft-model /path/to/vllm-compatible-eagle3-draft \
+  --input-jsonl /path/to/test.jsonl \
+  --output-jsonl outputs/vllm_eagle3_predictions.jsonl \
+  --num-speculative-tokens 3 \
+  --max-new-tokens 256 \
+  --dtype bfloat16 \
+  --trust-remote-code
+```
+
+Single input:
+
+```bash
+python scripts/vllm_eagle3_infer.py \
+  --target-model /path/to/target-model \
+  --draft-model /path/to/vllm-compatible-eagle3-draft \
+  --response-text "Create a chart showing monthly revenue" \
+  --num-speculative-tokens 3 \
+  --max-new-tokens 256 \
+  --dtype bfloat16 \
+  --trust-remote-code
+```
+
+vLLM loads EAGLE-3 drafters as Hugging Face model directories through
+`speculative_config={"method": "eagle3", ...}`. Such a directory must contain
+the architecture metadata and model weights expected by vLLM.
+
+The `draft_model.pt` produced by this repository is a custom
+`Eagle3DraftModel`, not a native vLLM EAGLE-3 checkpoint. It also consumes
+fresh target hidden states for each next-token prediction, so it cannot
+independently propose several future tokens. Passing `best-checkpoint` to the
+vLLM script is therefore rejected with a clear compatibility error rather than
+running an incorrect or non-accelerating loop. Use `test_generation` for that
+checkpoint, or train/export a native EAGLE-3 speculator before using vLLM.
+
 ## Fine-tuning from an existing drafter checkpoint
 
 If you already have a trained drafter checkpoint and want to continue fine-tuning it, set this in the bash file:
