@@ -29,6 +29,11 @@ pip install -r requirements.txt
 
 Use a Transformers version that includes `gemma4_assistant`.
 
+`bitsandbytes` is not required for the default BF16/FP16 LoRA path. If an
+incompatible `bitsandbytes` package is installed, the trainer bypasses PEFT's
+optional bitsandbytes dispatch. Quantized 4-bit/8-bit training still requires a
+working bitsandbytes/Triton combination.
+
 ## Configure and train
 
 Edit the variables at the top of:

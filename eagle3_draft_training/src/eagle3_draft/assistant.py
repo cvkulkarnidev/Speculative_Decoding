@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from transformers import AutoModelForCausalLM
 
 from .compatibility import validate_assistant_config
+from .peft_compat import disable_bitsandbytes_dispatch
 
 
 def unwrap_module(model: torch.nn.Module) -> torch.nn.Module:
@@ -34,7 +35,10 @@ def load_assistant_model(
     if adapter_path:
         from peft import PeftModel
 
-        model = PeftModel.from_pretrained(model, adapter_path, is_trainable=is_trainable)
+        if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
+            raise ValueError("Quantized assistant adapters require a working bitsandbytes installation.")
+        with disable_bitsandbytes_dispatch():
+            model = PeftModel.from_pretrained(model, adapter_path, is_trainable=is_trainable)
     return model
 
 
@@ -47,17 +51,20 @@ def add_lora(
 ) -> torch.nn.Module:
     from peft import LoraConfig, get_peft_model
 
-    return get_peft_model(
-        model,
-        LoraConfig(
-            r=rank,
-            lora_alpha=alpha,
-            lora_dropout=dropout,
-            bias="none",
-            task_type="CAUSAL_LM",
-            target_modules="all-linear",
-        ),
-    )
+    if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
+        raise ValueError("Quantized LoRA training requires a working bitsandbytes installation.")
+    with disable_bitsandbytes_dispatch():
+        return get_peft_model(
+            model,
+            LoraConfig(
+                r=rank,
+                lora_alpha=alpha,
+                lora_dropout=dropout,
+                bias="none",
+                task_type="CAUSAL_LM",
+                target_modules="all-linear",
+            ),
+        )
 
 
 def shift_left(tensor: torch.Tensor, fill_value: int | float) -> torch.Tensor:
